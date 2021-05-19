@@ -1,0 +1,5 @@
+#!/bin/bash -e
+
+cd $(dirname "${BASH_SOURCE[0]}")
+
+./list_certs.py <(./get_server_tls_certs.py $1 2>/dev/zero)
