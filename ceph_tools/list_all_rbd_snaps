@@ -1,0 +1,32 @@
+#!/usr/bin/env python3
+import sys
+import rados, rbd
+
+cluster = rados.Rados()
+cluster.conf_read_file()
+cluster.conf_parse_argv(sys.argv)
+cluster.connect()
+
+
+pool = sys.argv[1]
+ioctx = cluster.open_ioctx(pool)
+rbd_inst = rbd.RBD()
+
+for img_name in rbd_inst.list(ioctx):
+    print("%s/%s:" % (pool, img_name))
+    img = rbd.Image(ioctx, img_name)
+
+    snaps = False
+    for snap in img.list_snaps():
+        name = snap['name']
+        id_ = snap['id']
+
+        trash_info = ''
+        if 'trash' in snap:
+            trash_info = ' (trash)'
+
+        print("  @%s [id: %s]%s" % (name, id_, trash_info))
+        snaps = True
+
+    if snaps:
+        print()
