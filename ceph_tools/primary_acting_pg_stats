@@ -1,0 +1,138 @@
+#!/usr/bin/env python3
+import json
+import rados
+from contextlib import contextmanager
+
+
+@contextmanager
+def cluster():
+    c = rados.Rados()
+    c.conf_read_file()
+    c.connect()
+
+    yield c
+
+    c.shutdown
+
+
+def ensure_ret(ret, code):
+    if code != ret:
+        print("Operation failed: %d (!= %d)" % (ret, code))
+        raise RequestQuit(code)
+
+
+def main():
+    # Get crush- and pg map
+    with cluster() as c:
+        ret, outbuf, outs = c.mon_command(json.dumps({
+                'prefix': "osd crush dump",
+                'format': "json"
+            }),
+            b'')
+
+        ensure_ret(ret, 0)
+        crushmap = json.loads(outbuf)
+
+        ret, outbuf, outs = c.mon_command(json.dumps({
+                'prefix': "pg dump",
+                'format': "json"
+            }),
+            b'')
+
+        ensure_ret(ret, 0)
+        pgmap = json.loads(outbuf)["pg_map"]
+
+        # Find hosts and their OSDs
+        hosts = {}
+        for b in crushmap['buckets']:
+            if b['type_name'] == 'host' and '~' not in b['name']:
+                hosts[b['name']] = [i['id'] for i in b['items']]
+
+        # Sort OSD lists of hosts
+        for os in hosts.values():
+            os.sort()
+
+        print("Hosts and their OSDs:")
+        for h in sorted(hosts):
+            osds = hosts[h]
+            print("  %s: [%s]" % (h, ', '.join(['%3d' % o for o in osds])))
+
+        print()
+
+        osd_host_map = { osd: host for host in hosts for osd in hosts[host] }
+
+        # Get PGs of each pool
+        pools = c.list_pools()
+        pools.sort()
+
+        pool_pg_map = { p: [] for p in pools }
+        pgs = {}
+
+        for pg in pgmap['pg_stats']:
+            p = {
+                'pgid': pg['pgid'],
+                'pool': c.pool_reverse_lookup(int(pg['pgid'].split('.')[0])),
+                'state': pg['state'],
+                'acting': pg['acting'],
+                'up_primary': pg['up_primary'],
+                'acting_primary': pg['acting_primary']
+            }
+
+            pgs[pg['pgid']] = p
+            pool_pg_map[p['pool']].append(pg['pgid'])
+
+        for p in pool_pg_map.values():
+            p.sort()
+
+        # Compute acting-primary-statistics
+        total_acting_primary_map = { host: 0 for host in hosts }
+        for p in pools:
+            print("Pool %s:" % p)
+
+            ppgs = [pgs[pgid] for pgid in pool_pg_map[p]]
+
+            for host in hosts:
+                primary = []
+                osds = set()
+
+                for ppg in ppgs:
+                    osd = ppg['acting_primary']
+                    if osd_host_map[osd] == host:
+                        osds.add(osd)
+                        primary.append(ppg)
+
+                primary.sort(key=lambda ppg: ppg['pgid'])
+
+                print("  %s: %d (osds: [%s])" % (
+                    host,
+                    len(primary),
+                    ', '.join("%3d" % o for o in sorted(osds))
+                ))
+
+                total_acting_primary_map[host] += len(primary)
+
+            print()
+
+        print("Total acting primary counts:")
+        for host in hosts:
+            print("  %s: %d" % (host, total_acting_primary_map[host]))
+
+
+#********************************** Exceptions ********************************
+class RequestQuit(Exception):
+    def __init__(self, code):
+        self._code = code
+
+    @property
+    def code(self):
+        return self._code
+
+
+# Startup code
+if __name__ == '__main__':
+    try:
+        main()
+    except RequestQuit as e:
+        exit(e.code)
+
+    exit(0)
