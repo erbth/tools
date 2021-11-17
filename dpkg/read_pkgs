@@ -1,0 +1,20 @@
+#!/usr/bin/python3
+import sys
+import dpkg_db
+
+
+DB_PATH = '/tmp/tmp'
+
+
+def main():
+    db = dpkg_db.DPKGDB(DB_PATH)
+    db.read_status()
+
+    for pkg in db:
+        print(pkg['Package'])
+
+    sys.exit(0)
+
+
+if __name__ == '__main__':
+    main()
