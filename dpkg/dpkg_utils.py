@@ -1,5 +1,4 @@
 import subprocess
-from urllib import parse
 
 
 def download(pkg, dst):
@@ -18,7 +17,15 @@ def download(pkg, dst):
 
 
 def gen_deb_filename(pkg):
-    return pkg['Package'] + '_' + parse.quote(pkg['Version'], safe='+').lower() + \
+    def _work_char(c):
+        return {
+            ':': '%3a'
+        }.get(c, c)
+
+    def _work(s):
+        return ''.join(_work_char(c) for c in s)
+
+    return pkg['Package'] + '_' + _work(pkg['Version']) + \
             '_' + pkg['Architecture'] + '.deb'
 
 

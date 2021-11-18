@@ -15,7 +15,7 @@ COLOR_RED = "\033[31m"
 COLOR_GREEN = "\033[32m"
 COLOR_NORMAL = "\033[0m"
 
-DB_PATH = '/tmp/tmp'
+DB_PATH = '/var/lib/dpkg'
 DOWNLOAD_LOCATION = '/tmp/deb_cache'
 
 
@@ -40,7 +40,7 @@ def unpack_pkg(filename, dst):
         '-C', control_dir, './md5sums'])
 
     if ret.returncode != 0:
-        raise RuntimeError('tar failed')
+        raise ExtractException
 
 
 def main():
@@ -71,12 +71,13 @@ def main():
 
     # Verify deb packages
     for pkg in db:
-        if pkg['Package'] == 'atom':
-            continue
-
         pkg_key = dpkg_db.gen_pkg_key(pkg)
         if pkg_key in failed_pkgs:
             continue
+
+        # if pkg['Package'] in ('atom', 'binutils-doc', 'code'):
+        #     failed_pkgs[pkg_key] = "Excluded manually"
+        #     continue
 
         with tempfile.TemporaryDirectory() as d:
             print("Verifying %s:%s=%s ... " % (pkg['Package'], pkg['Architecture'], pkg['Version']),
@@ -88,7 +89,12 @@ def main():
                 print(COLOR_RED + "FAILED" + COLOR_NORMAL)
                 continue
 
-            unpack_pkg(deb_filename, d)
+            try:
+                unpack_pkg(deb_filename, d)
+            except ExtractException:
+                failed_pkgs[pkg_key] = 'Failed to extract md5sums'
+                print(COLOR_RED + "FAILED" + COLOR_NORMAL)
+                continue
 
             ref = os.path.join(d, 'c', 'md5sums')
             real1 = os.path.join(DB_PATH, 'info', pkg['Package'] + '.md5sums')
@@ -107,6 +113,22 @@ def main():
                 print(COLOR_GREEN + "ok" + COLOR_NORMAL)
             else:
                 print(COLOR_RED + "FAILED" + COLOR_NORMAL)
+                failed_pkgs[pkg_key] = "md5sum missmatch"
+
+
+    if failed_pkgs:
+        print("\nThe following errors occured:")
+
+        for k, v in failed_pkgs.items():
+            print("Pkg: %s, error: %s" % k, v)
+
+    else:
+        print("\nNo errors occured.")
+
+
+#******************************* Exceptions ***********************************
+class ExtractException(Exception):
+    pass
 
 
 if __name__ == '__main__':
