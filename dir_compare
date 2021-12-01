@@ -1,0 +1,70 @@
+#!/usr/bin/python3
+import os
+import stat
+import sys
+import traceback
+
+
+def main():
+    if len(sys.argv) != 3:
+        print("Usage: %s <reference directory> <test directory>" % sys.argv[0])
+        sys.exit(1)
+
+    refdir = sys.argv[1]
+    testdir = sys.argv[2]
+
+    def _work(refp, testp):
+        s1 = os.lstat(refp)
+        s2 = os.lstat(testp)
+
+        if stat.S_IFMT(s1.st_mode) != stat.S_IFMT(s2.st_mode):
+            print("'%s' != '%s' (type)" % (refp, testp))
+            return False
+
+        if stat.S_ISDIR(s1.st_mode):
+            c1 = set(os.listdir(refp))
+            c2 = set(os.listdir(testp))
+
+            if c1 - c2:
+                print("'%s' != '%s' (directory content)" % (refp, testp))
+                return False
+
+            r = True
+            for c in sorted(c1):
+                r = r & _work(os.path.join(refp, c), os.path.join(testp, c))
+
+        elif stat.S_ISREG(s1.st_mode):
+            # Compare content
+            with open(refp, 'rb') as f1:
+                with open(testp, 'rb') as f2:
+                    while True:
+                        c1 = f1.read(100000)
+                        c2 = f2.read(100000)
+
+                        if c1 != c2:
+                            print("'%s' != '%s' (file contant)" % (refp, testp))
+                            return False
+
+                        if len(c1) == 0:
+                            break
+
+        elif stat.S_ISLNK(s1.st_mode):
+            if os.readlink(refp) != os.readlink(testp):
+                print("'%s' != '%s' (symlink target)" % (refp, testp))
+                return False
+
+        else:
+            raise RuntimeError("Unsupported filetype: %x" % (s1.st_mode))
+
+        return True
+
+    try:
+        sys.exit(0 if _work(refdir, testdir) else 1)
+    except Exception as exc:
+        traceback.print_exc()
+        sys.exit(2)
+
+
+
+if __name__ == '__main__':
+    main()

@@ -2,6 +2,7 @@
 """
 Verify the .md5sums-files stored in DPKG's database
 """
+import hashlib
 import os
 import subprocess
 import sys
@@ -13,6 +14,7 @@ import dpkg_utils
 
 COLOR_RED = "\033[31m"
 COLOR_GREEN = "\033[32m"
+COLOR_YELLOW = "\033[33m"
 COLOR_NORMAL = "\033[0m"
 
 DB_PATH = '/var/lib/dpkg'
@@ -40,7 +42,60 @@ def unpack_pkg(filename, dst):
         '-C', control_dir, './md5sums'])
 
     if ret.returncode != 0:
+        raise NoHashException
+
+
+def generate_md5sums_from_pkg(filename, dst):
+    pkg_dir = os.path.join(dst, 'u')
+    control_dir = os.path.join(dst, 'c')
+    data_dir = os.path.join(dst, 'd')
+
+    ret = subprocess.run(['ar', 'x', filename, 'data.tar.gz', 'data.tar.xz'],
+            stderr=subprocess.DEVNULL, cwd=pkg_dir)
+
+    if ret.returncode != 0:
+        raise RuntimeError("ar failed")
+
+    data = os.path.join(pkg_dir, 'data.tar.gz')
+    if not os.path.isfile(data):
+        data = os.path.join(pkg_dir, 'data.tar.xz')
+
+    os.mkdir(data_dir)
+
+    # Ensure extracting data is safe (note that tar will ensure this, too)
+    ret = subprocess.run(['tar', '-tf', data], stdout=subprocess.PIPE)
+    if ret.returncode != 0:
         raise ExtractException
+
+    for l in ret.stdout.decode().splitlines():
+        if not l.startswith('./') or '..' in l:
+            raise RuntimeError("Unsafe data detected in data archive")
+
+    # Extract data
+    ret = subprocess.run(['tar', '-xf', data, '-C', data_dir, '.'])
+    if ret.returncode != 0:
+        raise ExtractException
+
+    # Calculate md5sums of all files
+    with open(os.path.join(control_dir, 'md5sums'), 'w', encoding='utf8') as sumfile:
+        def _process(f, rel=''):
+            if os.path.isdir(f):
+                for c in sorted(os.listdir(f)):
+                    _process(os.path.join(f, c), os.path.join(rel, c))
+
+            elif os.path.isfile(f) and not os.path.islink(f):
+                h = hashlib.md5()
+
+                with open(f, 'rb') as file_:
+                    while True:
+                        c = file_.read(100000)
+                        if len(c) == 0:
+                            break
+                        h.update(c)
+
+                sumfile.write(h.hexdigest() + "  " + rel + "\n")
+
+        _process(data_dir)
 
 
 def main():
@@ -48,6 +103,7 @@ def main():
     db.read_status()
 
     failed_pkgs = {}
+    manual_pkgs = set()
 
     # Download deb packages
     if not os.path.isdir(DOWNLOAD_LOCATION):
@@ -79,7 +135,7 @@ def main():
         #     failed_pkgs[pkg_key] = "Excluded manually"
         #     continue
 
-        with tempfile.TemporaryDirectory() as d:
+        with tempfile.TemporaryDirectory(dir='/tmp/tmp') as d:
             print("Verifying %s:%s=%s ... " % (pkg['Package'], pkg['Architecture'], pkg['Version']),
                     end='', flush=True)
 
@@ -91,10 +147,10 @@ def main():
 
             try:
                 unpack_pkg(deb_filename, d)
-            except ExtractException:
-                failed_pkgs[pkg_key] = 'Failed to extract md5sums'
-                print(COLOR_RED + "FAILED" + COLOR_NORMAL)
-                continue
+            except NoHashException:
+                print(COLOR_YELLOW + "WARNING: Computing md5sums manually" + COLOR_NORMAL)
+                generate_md5sums_from_pkg(deb_filename, d)
+                manual_pkgs.add(pkg_key)
 
             ref = os.path.join(d, 'c', 'md5sums')
             real1 = os.path.join(DB_PATH, 'info', pkg['Package'] + '.md5sums')
@@ -104,12 +160,11 @@ def main():
 
             if e1 and e2:
                 raise RuntimeError("md5sums db contradiction")
-            elif not e1 and not e2:
-                raise RuntimeError("md5sums db missing")
 
-            real = real1 if e1 else real2
+            real = real1 if e1 else (real2 if e2 else None)
 
-            if subprocess.run(['cmp', ref, real], cwd=d).returncode == 0:
+            if real is not None and \
+                    subprocess.run(['cmp', ref, real], cwd=d).returncode == 0:
                 print(COLOR_GREEN + "ok" + COLOR_NORMAL)
             else:
                 print(COLOR_RED + "FAILED" + COLOR_NORMAL)
@@ -125,9 +180,20 @@ def main():
     else:
         print("\nNo errors occured.")
 
+    if manual_pkgs:
+        print("\nThe md5sums-files of the following packages were generated manually:")
+        for k in manual_pkgs:
+            print("    " + str(k))
+
+    else:
+        print("\nNo md5sums-files were computed manually.")
+
 
 #******************************* Exceptions ***********************************
 class ExtractException(Exception):
+    pass
+
+class NoHashException(Exception):
     pass
 
 

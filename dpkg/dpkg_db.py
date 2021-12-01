@@ -45,7 +45,10 @@ AVAILABLE_KEYS = {
     'Config-Version',
     'Postgresql-Catversion',
     'Auto-Built-Package',
-    'Description'
+    'Description',
+    'License',
+    'Vendor',
+    'Cnf-Visible-Pkgname',
 }
 
 REQUIRED_KEYS = {
@@ -111,7 +114,7 @@ class DPKGDB:
                     if cur_pkg is None:
                         cur_pkg = {}
 
-                    m = re.fullmatch(r'([A-Za-z-]+):(?:\s+(\S.*))?', line)
+                    m = re.fullmatch(r'([A-Za-z-]+):(?:\s+(\S.*)?)?', line)
                     if not m:
                         raise InvalidLine(status_path, lineno, "Expected k: v")
 
