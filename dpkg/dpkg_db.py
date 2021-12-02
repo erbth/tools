@@ -49,6 +49,8 @@ AVAILABLE_KEYS = {
     'License',
     'Vendor',
     'Cnf-Visible-Pkgname',
+    'Protected',
+    'Lua-Versions',
 }
 
 REQUIRED_KEYS = {

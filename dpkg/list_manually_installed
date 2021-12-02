@@ -1,0 +1,92 @@
+#!/usr/bin/python3
+import argparse
+import os
+import re
+import sys
+import dpkg_db
+
+
+EXTENDED_KEYS = {
+    'Package',
+    'Architecture',
+    'Auto-Installed'
+}
+
+DEFAULT_ARCH = 'amd64'
+
+
+def read_extended_states(path):
+    states = {}
+
+    with open(path, 'r', encoding='utf8') as f:
+        cur = None
+        lineno = 0
+
+        for line in f:
+            lineno += 1
+            line = line.strip()
+
+            if line.startswith('Package:'):
+                if cur is None:
+                    cur = {'Package': re.fullmatch(r'Package:\s+(\S.*)', line)[1]}
+                else:
+                    raise RuntimeError("%s:%s: Unexpected start of package description" % (path, lineno))
+
+            elif not line:
+                if not cur or any(k not in cur for k in EXTENDED_KEYS):
+                    raise RuntimeError("%s:%s: Incomplete package description" % (path, lineno))
+
+                if cur['Package'] in states:
+                    raise RuntimeError("%s:%s: Duplicate package description" % (path, lineno))
+
+                states[dpkg_db.gen_pkg_key(cur)] = cur
+                cur = None
+
+            else:
+                m = re.fullmatch(r'([A-Za-z-]+):\s+(\S.*)', line)
+                if m[1] not in EXTENDED_KEYS:
+                    raise RuntimeError("%s:%s: Invalid key" % (path, lineno))
+
+                if m[1] in cur:
+                    raise RuntimeError("%s:%s: Duplicate key" % (path, lineno))
+
+                cur[m[1]] = m[2]
+
+    return states
+
+
+def main():
+    # Parse arguments
+    parser = argparse.ArgumentParser('List manually installed packages from dpkg status directory')
+    parser.add_argument('--status-dir', default='/var/lib/dpkg',
+            help="Path to dpkg status directory (default: /var/lib/dpkg); "
+            "The apt status directory is accessed through a relative path starting from there")
+
+    args = parser.parse_args()
+    status_dir = args.status_dir
+    apt_status_dir = os.path.join(status_dir, '..', 'apt')
+    extended_states_file = os.path.join(apt_status_dir, 'extended_states')
+
+    db = dpkg_db.DPKGDB(status_dir)
+    db.read_status()
+
+    extended_states = read_extended_states(extended_states_file)
+
+    for pkg in db:
+        pkg_key = dpkg_db.gen_pkg_key(pkg)
+
+        # :all packages are listed with the default (?) architecture in
+        # extended states
+        if pkg_key[1] == 'all':
+            pkg_key = (pkg_key[0], DEFAULT_ARCH)
+
+        if pkg_key not in extended_states or extended_states[pkg_key]['Auto-Installed'] != '1':
+            if pkg['Architecture'] in (DEFAULT_ARCH, 'all'):
+                print(pkg['Package'])
+            else:
+                print('%s:%s' % (pkg['Package'], pkg['Architecture']))
+
+
+if __name__ == '__main__':
+    main()
+    sys.exit(0)
