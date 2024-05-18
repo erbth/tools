@@ -70,10 +70,12 @@ def print_list_diff(l1, l2):
         # End-of-list cases
         if m < len(l1):
             print("    only in 1 (pos %d): %s" % (m, v1))
+            m += 1
             continue
 
         if n < len(l2):
             print("    only in 2 (pos %d): %s" % (n, v2))
+            n += 1
             continue
 
         raise RuntimeError("Diff algorithm fault")
